@@ -7,6 +7,9 @@ import boto3
 import base64
 import os
 import time
+import signal
+import sys
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -24,68 +27,83 @@ class PostgresConnector:
         self.conn = None
         self.read_only = True  # Default to read-only mode
         
-    def connect(self):
+    def connect(self, max_retries=3):
         """Connect to PostgreSQL database using either AWS Secrets or direct credentials"""
-        try:
-            if self.secret_name and self.region_name:
-                # Get credentials from AWS Secrets Manager
-                session = boto3.session.Session()
-                client = session.client(
-                    service_name='secretsmanager',
-                    region_name=self.region_name
+        retries = 0
+        while retries < max_retries:
+            try:
+                if self.secret_name and self.region_name:
+                    # Get credentials from AWS Secrets Manager
+                    session = boto3.session.Session()
+                    client = session.client(
+                        service_name='secretsmanager',
+                        region_name=self.region_name
+                    )
+                    
+                    get_secret_value_response = client.get_secret_value(
+                        SecretId=self.secret_name
+                    )
+                    
+                    if 'SecretString' in get_secret_value_response:
+                        secret = json.loads(get_secret_value_response['SecretString'])
+                        self.host = secret.get('host')
+                        self.port = secret.get('port', 5432)
+                        self.dbname = secret.get('dbname')
+                        self.user = secret.get('username')
+                        self.password = secret.get('password')
+                    else:
+                        decoded_binary_secret = base64.b64decode(get_secret_value_response['SecretBinary'])
+                        secret = json.loads(decoded_binary_secret)
+                        self.host = secret.get('host')
+                        self.port = secret.get('port', 5432)
+                        self.dbname = secret.get('dbname')
+                        self.user = secret.get('username')
+                        self.password = secret.get('password')
+                elif not all([self.host, self.dbname, self.user, self.password]):
+                    # If direct credentials are not provided and no secret name, we can't connect
+                    print("Error: Either AWS Secrets Manager details or direct database credentials must be provided")
+                    return False
+                
+                # Connect to the database
+                self.conn = psycopg2.connect(
+                    host=self.host,
+                    port=self.port or 5432,
+                    dbname=self.dbname,
+                    user=self.user,
+                    password=self.password,
+                    connect_timeout=10  # Add connection timeout
                 )
                 
-                get_secret_value_response = client.get_secret_value(
-                    SecretId=self.secret_name
-                )
+                # Set session to read-only mode for safety
+                if self.read_only:
+                    with self.conn.cursor() as cursor:
+                        cursor.execute("SET TRANSACTION READ ONLY")
+                        cursor.execute("SET statement_timeout = '30s'")  # 30-second timeout
                 
-                if 'SecretString' in get_secret_value_response:
-                    secret = json.loads(get_secret_value_response['SecretString'])
-                    self.host = secret.get('host')
-                    self.port = secret.get('port', 5432)
-                    self.dbname = secret.get('dbname')
-                    self.user = secret.get('username')
-                    self.password = secret.get('password')
+                print(f"Connected to PostgreSQL database: {self.dbname} at {self.host}")
+                return True
+            except Exception as e:
+                retries += 1
+                print(f"Error connecting to database (attempt {retries}/{max_retries}): {str(e)}")
+                if retries < max_retries:
+                    time.sleep(2)  # Wait before retrying
                 else:
-                    decoded_binary_secret = base64.b64decode(get_secret_value_response['SecretBinary'])
-                    secret = json.loads(decoded_binary_secret)
-                    self.host = secret.get('host')
-                    self.port = secret.get('port', 5432)
-                    self.dbname = secret.get('dbname')
-                    self.user = secret.get('username')
-                    self.password = secret.get('password')
-            elif not all([self.host, self.dbname, self.user, self.password]):
-                # If direct credentials are not provided and no secret name, we can't connect
-                print("Error: Either AWS Secrets Manager details or direct database credentials must be provided")
-                return False
-            
-            # Connect to the database
-            self.conn = psycopg2.connect(
-                host=self.host,
-                port=self.port or 5432,
-                dbname=self.dbname,
-                user=self.user,
-                password=self.password
-            )
-            
-            # Set session to read-only mode for safety
-            if self.read_only:
-                with self.conn.cursor() as cursor:
-                    cursor.execute("SET TRANSACTION READ ONLY")
-                    cursor.execute("SET statement_timeout = '30s'")  # 30-second timeout
-            
-            print(f"Connected to PostgreSQL database: {self.dbname} at {self.host}")
-            return True
-        except Exception as e:
-            print(f"Error connecting to database: {str(e)}")
-            return False
+                    print("Max connection retries reached")
+                    return False
     
     def disconnect(self):
         """Close the database connection"""
         if self.conn:
-            self.conn.close()
-            self.conn = None
-            print("Database connection closed")
+            try:
+                self.conn.close()
+                self.conn = None
+                print("Database connection closed")
+            except Exception as e:
+                print(f"Error closing database connection: {str(e)}")
+    
+    def __del__(self):
+        """Destructor to ensure connections are closed"""
+        self.disconnect()
     
     def execute_query(self, query, params=None):
         """Execute a query and return results as a list of dictionaries"""
@@ -123,8 +141,20 @@ class PostgresConnector:
                 # For non-SELECT queries, commit and return empty list
                 self.conn.commit()
                 return []
+        except psycopg2.OperationalError as e:
+            print(f"Database connection error: {str(e)}")
+            # Try to reconnect
+            self.disconnect()
+            if self.connect():
+                # Retry the query once
+                return self.execute_query(query, params)
+            return []
         except Exception as e:
-            self.conn.rollback()
+            if self.conn:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass  # Ignore rollback errors
             print(f"Error executing query: {str(e)}")
             return []
 
@@ -219,15 +249,53 @@ async def server_lifespan(server: FastMCP):
     try:
         print("Starting PostgreSQL Performance Analyzer MCP Server")
         yield
+    except Exception as e:
+        print(f"Server error: {str(e)}")
     finally:
         # Clean up any remaining database connections
-        for context_id, connector in db_contexts.items():
+        for context_id, connector in list(db_contexts.items()):
             if connector:
-                connector.disconnect()
-                print(f"Closed database connection for context {context_id}")
+                try:
+                    connector.disconnect()
+                    print(f"Closed database connection for context {context_id}")
+                except Exception as e:
+                    print(f"Error closing connection for context {context_id}: {str(e)}")
+        db_contexts.clear()
 
 # Set the lifespan manager
 mcp.lifespan = server_lifespan
+
+# Add event handlers for client connections
+#@mcp.on_event("startup")
+async def startup():
+    """Handle server startup events"""
+    print("Server starting up - initializing resources")
+
+#@mcp.on_event("shutdown")
+async def shutdown():
+    """Handle server shutdown events"""
+    print("Server shutting down - cleaning up resources")
+    # Clean up any remaining database connections
+    for context_id, connector in list(db_contexts.items()):
+        if connector:
+            connector.disconnect()
+    db_contexts.clear()
+
+# Add a connection handler to properly manage client connections
+#@mcp.on_event("client_connect")
+async def client_connect(client_id: str):
+    """Handle client connection"""
+    print(f"Client connected: {client_id}")
+
+#@mcp.on_event("client_disconnect")
+async def client_disconnect(client_id: str):
+    """Handle client disconnection"""
+    print(f"Client disconnected: {client_id}")
+    # Clean up resources for this client
+    if client_id in db_contexts:
+        connector = db_contexts.pop(client_id)
+        if connector:
+            connector.disconnect()
 
 # Helper functions for database structure analysis
 def get_database_structure(connector):
@@ -1724,6 +1792,7 @@ async def health_check(ctx: Context = None) -> str:
 if __name__ == "__main__":
     import argparse
     import logging
+    import sys
     
     # Configure logging
     logging.basicConfig(
@@ -1732,9 +1801,23 @@ if __name__ == "__main__":
     )
     logger = logging.getLogger("postgres-analyzer")
     
+    # Define signal handler for graceful shutdown
+    def signal_handler(sig, frame):
+        print("Shutting down PostgreSQL Performance Analyzer MCP server...")
+        # Clean up any remaining database connections
+        for context_id, connector in list(db_contexts.items()):
+            if connector:
+                connector.disconnect()
+        sys.exit(0)
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     parser = argparse.ArgumentParser(description='PostgreSQL Performance Analyzer MCP Server')
     parser.add_argument('--port', type=int, default=8000, help='Port to run the server on')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind the server to')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     
     args = parser.parse_args()
     
@@ -1742,9 +1825,14 @@ if __name__ == "__main__":
     mcp.settings.port = args.port
     mcp.settings.host = args.host
     
+    # Set debug level if requested
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     print(f"Starting PostgreSQL Performance Analyzer MCP server on {args.host}:{args.port} with SSE transport")
     
     try:
+        # Configure SSE transport with proper error handling
         mcp.run(transport='sse')
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
@@ -1752,4 +1840,8 @@ if __name__ == "__main__":
         import time
         time.sleep(5)  # Wait 5 seconds before restarting
         print("Attempting to restart server...")
-        mcp.run(transport='sse')
+        try:
+            mcp.run(transport='sse')
+        except Exception as restart_error:
+            logger.error(f"Failed to restart server: {str(restart_error)}")
+            sys.exit(1)
