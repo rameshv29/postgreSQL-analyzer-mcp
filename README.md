@@ -1,10 +1,10 @@
-# PostgreSQL Performance MCP
+# PostgreSQL Analyzer MCP
 
 A Model Context Protocol (MCP) server for PostgreSQL database performance analysis and optimization.
 
 ## Overview
 
-PostgreSQL Performance MCP is a powerful tool that leverages AI to help database administrators and developers optimize their PostgreSQL databases. It provides comprehensive analysis of database structure, query performance, index usage, and configuration settings, along with actionable recommendations for improvement.
+PostgreSQL Analyzer MCP is a powerful tool that leverages AI to help database administrators and developers optimize their PostgreSQL databases. It provides comprehensive analysis of database structure, query performance, index usage, and configuration settings, along with actionable recommendations for improvement.
 
 This tool runs as a remote MCP server using Server-Sent Events (SSE) transport, allowing it to be deployed centrally and accessed by any MCP-compatible client, including Amazon Q Developer CLI, Claude and other AI assistants that support the MCP protocol.
 
