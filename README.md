@@ -188,3 +188,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - PostgreSQL community for their excellent documentation
 - MCP protocol developers for enabling AI-powered tools
+- This project was created using vibe coding - an AI-assisted development approach that combines human expertise with AI capabilities to create robust, maintainable software solutions.
