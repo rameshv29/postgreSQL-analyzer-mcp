@@ -47,8 +47,10 @@ This tool operates in **read-only mode** by default. All database connections ar
    cd postgres-performance-mcp
    ```
 
-2. Install dependencies:
+2. Create virtual environment and Install dependencies:
    ```bash
+   python -m venv venv
+   source venv/bin/activate 
    pip install -r requirements.txt
    ```
 
