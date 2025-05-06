@@ -35,11 +35,13 @@ This tool operates in **read-only mode** by default. All database connections ar
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.12+ (or Docker)
 - Amazon Aurora or RDS PostgreSQL database
 - AWS account (for Secrets Manager, optional)
 
 ### Setup
+
+#### Option 1: Local Setup
 
 1. Clone the repository:
    ```bash
@@ -54,6 +56,33 @@ This tool operates in **read-only mode** by default. All database connections ar
    pip install -r requirements.txt
    ```
 
+#### Option 2: Docker Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/postgres-performance-mcp.git
+   cd postgres-performance-mcp
+   ```
+
+2. Build the Docker image:
+   ```bash
+   docker build -t postgres-analyzer-mcp -f Dockerfile .
+   ```
+
+3. Run the Docker container:
+   ```bash
+   docker run -p 8000:8000 postgres-analyzer-mcp
+   ```
+
+   For AWS credentials (if using Secrets Manager):
+   ```bash
+   docker run -p 8000:8000 \
+     -e AWS_ACCESS_KEY_ID=your_access_key \
+     -e AWS_SECRET_ACCESS_KEY=your_secret_key \
+     -e AWS_DEFAULT_REGION=your_region \
+     postgres-analyzer-mcp
+   ```
+
 3. Configure your database credentials:
    - Option 1: Store credentials in AWS Secrets Manager (recommended)
    - Option 2: Provide credentials directly when using the tools
@@ -62,8 +91,15 @@ This tool operates in **read-only mode** by default. All database connections ar
 
 ### Starting the Server
 
+#### Local:
 ```bash
-python server.py --host 0.0.0.0 --port 8000
+python src/main.py --host 0.0.0.0 --port 8000
+```
+
+#### Docker:
+```bash
+# The server starts automatically when running the container
+docker run -p 8000:8000 postgres-analyzer-mcp
 ```
 
 ### Configuring MCP Clients
@@ -176,6 +212,24 @@ execute_read_only_query(
 )
 ```
 
+## Deploying to a Remote Server
+
+To deploy the MCP server to a remote machine:
+
+1. Install Docker on your remote server
+2. Copy the project files to the server or clone from your repository
+3. Build and run the Docker container:
+   ```bash
+   docker build -t postgres-analyzer-mcp -f Dockerfile .
+   docker run -d -p 8000:8000 postgres-analyzer-mcp
+   ```
+4. Consider using a process manager like `docker-compose` or `systemd` to ensure the container restarts if the server reboots
+
+For secure access, consider setting up:
+- A reverse proxy with SSL/TLS (like Nginx or Traefik)
+- Authentication middleware
+- Firewall rules to restrict access
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -186,6 +240,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgements
 
-- PostgreSQL community for their excellent documentation
+- PostgreSQL community for their documentation
 - MCP protocol developers for enabling AI-powered tools
 - This project was created using vibe coding - an AI-assisted development approach that combines human expertise with AI capabilities to create robust, maintainable software solutions.
