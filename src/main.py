@@ -28,6 +28,8 @@ mcp = FastMCP(
     You must provide an AWS Secrets Manager secret name containing your database credentials
     when using any of the tools.
     """,
+    stateless_http=True, 
+    json_response=False,
     lifespan=server_lifespan
 )
 
@@ -73,6 +75,10 @@ if __name__ == "__main__":
                         help='Session timeout in seconds (default: 1800)')
     parser.add_argument('--request-timeout', type=int, default=300,
                         help='Request timeout in seconds (default: 300)')
+    parser.add_argument('--log-level', type=str, default='INFO',
+                        help='Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)')
+    parser.add_argument('--json-response', action='store_true', default=False,
+                        help='Enable JSON responses instead of SSE streams')
     
     args = parser.parse_args()
     
@@ -95,11 +101,11 @@ if __name__ == "__main__":
     logger.info(f"Request timeout: {args.request_timeout} seconds")
     
     try:
-        mcp.run(transport='sse')
+        mcp.run(transport='streamable-http')
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
         # If the server crashes, try to restart it
         import time
         time.sleep(5)  # Wait 5 seconds before restarting
         logger.info("Attempting to restart server...")
-        mcp.run(transport='sse')
+        mcp.run(transport='streamable-http')
